@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  secret_scanning:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Secret Scanning
+      uses: trufflesecurity/trufflehog@main
+
+  backend_testing:
+    needs: [secret_scanning]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      
+    - name: Copy .env.sample
+      working-directory: backend/
+      run: cp .env.sample .env
+
+    - name: Install dependencies and run backend
+      working-directory: backend/
+      run: |
+        npm ci
+        npm run build --if-present
+        npm run dev &   # run in backend
+        sleep 5    # wait run dev
+
+    - name: Run tests and generate coverage report
+      working-directory: backend/
+      run: |
+        npm run test
+        mv coverage/index.html coverage/index-$(date +'%Y%m%d%H%M%S').html
+
+    - name: Check test results
+      run: |
+        if [ $? -eq 0 ]; then
+          echo "All tests passed successfully."
+        else
+          echo "Some tests failed. Exiting with a non-zero status."
+          exit 1
+        fi
+
+    - name: Get artifacts download URL
+      id: get_artifact_url
+      env:
+        GH_TOKEN: ${{ secrets.CICD }}
+      run: |
+        artifact_url=$(gh api -X GET /repos/${{ github.repository }}/actions/artifacts \
+          -q '.artifacts[] | select(.name=="coverage-report") | .archive_download_url' | head -n 1)
+        echo "artifact_url=$artifact_url" >> $GITHUB_ENV
+
+    - name: Download and extract artifact
+      env:
+        GH_TOKEN: ${{ secrets.CICD }}
+      run: |
+        curl -L -H "Authorization: token ${{ secrets.CICD }}" ${{ env.artifact_url }} -o artifact.zip
+        unzip artifact.zip -d previous_coverage
+
+    - name: Process previous coverage report
+      run: |
+        previous_report=$(ls -t previous_coverage/index-*.html | head -n2 | tail -n1)
+        Statements_previous_coverage=$(grep -C 1 'Statements' $previous_report | grep -Eo '([0-9]{1,2}\.[0-9]{1,2}%|100%|0%)' | head -1 | tr -d '%')
+        echo "Previous coverage: $Statements_previous_coverage %"
+
+    - name: Compare coverage with previous report
+      id: compare_coverage
+      run: |
+        previous_report=$(ls -t previous_coverage/index-*.html | head -n2 | tail -n1)
+        current_report=$(ls -t backend/coverage/index-*.html | head -n1)
+        if [ -f "$previous_report" ]; then
+          Statements_previous_coverage=$(grep -C 1 'Statements' $previous_report | grep -Eo '([0-9]{1,2}\.[0-9]{1,2}%|100%|0%)' | head -1 | tr -d '%')
+          Statements_current_coverage=$(grep -C 1 'Statements' $current_report | grep -Eo '([0-9]{1,2}\.[0-9]{1,2}%|100%|0%)' | head -1 | tr -d '%')
+          echo "Previous coverage: $Statements_previous_coverage %"
+          echo "Current coverage: $Statements_current_coverage %"
+          if (( $(echo "$Statements_current_coverage < $Statements_previous_coverage" | bc -l) )); then
+            echo "::set-output name=coverage_fail::true"
+          fi
+        fi
+
+    - name: Check coverage results
+      if: steps.compare_coverage.outputs.coverage_fail == 'true'
+      run: |
+        echo "Coverage is lower than previous report."
+        exit 1
+
+    - name: Upload coverage report as artifact
+      if: steps.compare_coverage.outputs.coverage_fail != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: backend/coverage
+
+  frontend_testing:
+    needs: [secret_scanning]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      
+    - name: Install dependencies and run frontend
+      working-directory: frontend/
+      run: |
+        npm ci
+        npm run build --if-present
+        npm run dev &   # run in backend
+        sleep 5    # wait run dev
+
+    - name: Run tests
+      working-directory: frontend/
+      run: npm run cy:test
+
+    - name: Check test results
+      run: |
+        if [ $? -eq 0 ]; then
+          echo "All tests passed successfully."
+        else
+          echo "Some tests failed. Exiting with a non-zero status."
+          exit 1
+        fi
+
+  Formatter:
+    needs: [backend_testing, frontend_testing]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        token: ${{secrets.CICD}}
+
+    - name: install prettier
+      run: |
+        npm install --global prettier
+
+    - name: Run js prettier and Check for changes
+      id: git-status
+      run: |
+        prettier --write '**/*.js' '**/*.ts' 2>/dev/null || true
+        echo "::set-output name=changed::$(git status --porcelain)"
+
+    - name: Commit changes
+      if: steps.git-status.outputs.changed != ''
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add .
+        git commit -m "Auto format code"
+        git push

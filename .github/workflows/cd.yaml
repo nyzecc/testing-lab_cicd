@@ -1,0 +1,47 @@
+name: CD
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  merge_group:
+    types: [checks_requested]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{secrets.CICD}}
+
+    - name: login ghcr
+      run: |
+        echo ${{secrets.CICD}} | sudo docker login ghcr.io -u nyzecc --password-stdin
+
+    - name: build backend image
+      working-directory: backend/
+      run: |
+        sudo docker build -t ghcr.io/nyzecc/testing-lab-backend .
+        sudo docker push ghcr.io/nyzecc/testing-lab-backend
+
+    - name: build frontend image
+      working-directory: frontend/
+      run: |
+        sudo docker build -t ghcr.io/nyzecc/testing-lab-frontend .
+        sudo docker push ghcr.io/nyzecc/testing-lab-frontend
+
+    - name: build k3d
+      working-directory: k8s/
+      run: |
+        kubectl apply -f deploys.yaml
+        kubectl apply -f services.yaml
+        kubectl apply -f ingress.yaml
+    
+    - name: get k3d info
+      run: |
+        kubectl get nodes
+        kubectl get pods
+        kubectl get svc
+        kubectl get ingress
