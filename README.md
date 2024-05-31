@@ -50,7 +50,16 @@ https://github.com/nyzecc/testing-lab_cicd/settings/actions/runners
 ```
 <img width="1193" alt="image" src="https://github.com/nyzecc/testing-lab_cicd/assets/65904378/86f50037-c720-4cfa-bdf8-c27d77876738">
 
+### run CICD
+<img width="932" alt="image" src="https://github.com/nyzecc/testing-lab_cicd/assets/65904378/683e8931-94e7-4170-b623-b271c19a363c">
+
 <img width="1278" alt="image" src="https://github.com/nyzecc/testing-lab_cicd/assets/65904378/45541c43-309c-42ac-a6a2-3d0bb6ad711a">
+
+### note
+```
+一定要先 ci 包一份 artifacts 上去
+因為跑 ci 前會先說抓上一份成工的 artifacts ，抓不到會噴錯
+```
 
 ----
 
